@@ -28,7 +28,13 @@ async def startup_event():
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],  # Next.js ports
+    allow_origins=[
+        "http://localhost:3000", 
+        "http://localhost:3001", 
+        "http://localhost:3002",
+        "https://ds-inventory-frontend.onrender.com",  # Render frontend URL
+        "https://*.onrender.com",  # Allow all Render subdomains
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -532,7 +538,17 @@ def update_user_profile(
 
 @app.get("/")
 def root():
-    return {"message": "Inventory Management API is running!"}
+    return {"message": "Inventory Management API is running!", "status": "healthy", "version": "1.0.0"}
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for monitoring"""
+    return {
+        "status": "healthy",
+        "message": "API is running",
+        "timestamp": func.now().isoformat(),
+        "version": "1.0.0"
+    }
 
 if __name__ == "__main__":
     import uvicorn
