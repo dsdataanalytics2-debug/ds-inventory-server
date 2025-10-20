@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ds-inventory-server
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements-minimal.txt && python add_name_column.py
+    startCommand: python start.py
+    envVars:
+      - key: SECRET_KEY
+        value: your-secret-key-change-this-in-production-render-deployment
