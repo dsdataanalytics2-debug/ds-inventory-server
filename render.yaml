@@ -4,12 +4,12 @@ services:
     env: python
     region: oregon
     plan: free
-    runtime: python-3.11.9
     buildCommand: |
-      pip install --upgrade pip setuptools wheel
-      pip install --only-binary=all --prefer-binary -r requirements.txt
-      python add_name_column.py || echo "Migration script completed"
-    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+      apt-get update && apt-get install -y python3.11 python3.11-pip python3.11-venv
+      python3.11 -m pip install --upgrade pip setuptools wheel
+      python3.11 -m pip install --only-binary=all --prefer-binary -r requirements-minimal.txt
+      python3.11 add_name_column.py || echo "Migration script completed"
+    startCommand: python3.11 -m uvicorn main:app --host 0.0.0.0 --port $PORT --no-reload
     envVars:
       - key: SECRET_KEY
         value: your-secret-key-change-this-in-production-render-deployment
