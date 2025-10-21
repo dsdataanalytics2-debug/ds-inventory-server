@@ -38,6 +38,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000", 
         "http://localhost:3001", 
+        "https://ds-inventory-client.vercel.app",
         "http://localhost:3002",
         "https://ds-inventory-frontend.onrender.com",  # Render frontend URL
         "https://*.onrender.com",  # Allow all Render subdomains
