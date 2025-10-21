@@ -1,7 +1,8 @@
+# Python 3.13 compatible requirements
 fastapi==0.115.4
 uvicorn==0.32.0
 sqlalchemy==2.0.35
-pydantic==2.9.2
+pydantic==2.10.1
 python-multipart==0.0.12
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
