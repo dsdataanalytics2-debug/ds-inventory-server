@@ -13,6 +13,9 @@ from database import SessionLocal, engine, get_db
 from auth import authenticate_user, create_access_token, get_current_user, require_role, create_superadmin, ACCESS_TOKEN_EXPIRE_MINUTES
 from activity import get_activity_logs
 
+# Force rebuild test - Pydantic v2 compatibility fix
+print("Force rebuild test")
+
 # Create database tables
 models.Base.metadata.create_all(bind=engine)
 
