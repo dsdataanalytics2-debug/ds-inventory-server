@@ -1,4 +1,4 @@
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from decimal import Decimal
 from datetime import datetime
@@ -120,7 +120,8 @@ class UserCreate(BaseModel):
     password: str
     role: str = "viewer"  # Accept lowercase role string
     
-    @validator('role')
+    @field_validator('role')
+    @classmethod
     def validate_role(cls, v):
         # Automatically convert to lowercase to ensure consistency
         if isinstance(v, str):
@@ -135,7 +136,8 @@ class User(UserBase):
     id: int
     created_at: datetime
     
-    @validator('role', pre=True)
+    @field_validator('role', mode='before')
+    @classmethod
     def convert_role_enum_to_string(cls, v):
         """Convert UserRole enum to string value"""
         if hasattr(v, 'value'):
@@ -143,7 +145,7 @@ class User(UserBase):
         return v  # If it's already a string, return as-is
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class UserLogin(BaseModel):
     username: str
@@ -197,14 +199,15 @@ class UserMeResponse(BaseModel):
     role: str
     created_at: datetime
     
-    @validator('role', pre=True)
+    @field_validator('role', mode='before')
+    @classmethod
     def convert_role_enum_to_string(cls, v):
         if hasattr(v, 'value'):
             return v.value
         return v
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class ProfileUpdateResponse(BaseModel):
     message: str
