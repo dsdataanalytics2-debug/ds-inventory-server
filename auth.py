@@ -97,7 +97,11 @@ def can_view(user: models.User) -> bool:
     return True
 
 def can_manage_users(user: models.User) -> bool:
-    """Check if user can manage other users"""
+    """Check if user can manage other users (superadmin and admin)"""
+    return user.role.value in ["superadmin", "admin"]
+
+def can_create_all_roles(user: models.User) -> bool:
+    """Check if user can create all roles including superadmin"""
     return user.role.value == "superadmin"
 
 def create_superadmin(db: Session):

@@ -4,6 +4,13 @@ from sqlalchemy.sql import func
 import enum
 from database import Base
 
+class Item(Base):
+    __tablename__ = "items"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    item_name = Column(String, unique=True, index=True)
+    created_at = Column(DateTime, default=func.now())
+
 class Product(Base):
     __tablename__ = "products"
     
@@ -71,3 +78,19 @@ class ActivityLog(Base):
     timestamp = Column(DateTime, default=func.now())
     
     user = relationship("User", back_populates="activity_logs")
+
+class Order(Base):
+    __tablename__ = "orders"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"))
+    product_name = Column(String)
+    quantity_sold = Column(Integer)
+    total_amount = Column(Numeric(10, 2))
+    customer_name = Column(String, nullable=True)
+    customer_address = Column(String, nullable=True)
+    customer_phone = Column(String, nullable=True)
+    sale_date = Column(DateTime, default=func.now())
+    created_by = Column(String)  # Username from JWT token
+    
+    product = relationship("Product")

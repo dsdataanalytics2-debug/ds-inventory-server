@@ -4,6 +4,33 @@ from decimal import Decimal
 from datetime import datetime
 import enum
 
+# Item Schemas
+class ItemCreate(BaseModel):
+    item_name: str
+    
+    @field_validator('item_name')
+    @classmethod
+    def validate_item_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Item name cannot be empty')
+        return v.strip()
+
+class ItemResponse(BaseModel):
+    id: int
+    item_name: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ItemsListResponse(BaseModel):
+    items: List[ItemResponse]
+
+class ItemCreateResponse(BaseModel):
+    success: bool
+    message: str
+    item: Optional[ItemResponse] = None
+
 class AddProductRequest(BaseModel):
     product_name: str
     quantity: int
@@ -211,3 +238,56 @@ class UserMeResponse(BaseModel):
 
 class ProfileUpdateResponse(BaseModel):
     message: str
+
+# Order Schemas
+class CreateOrderRequest(BaseModel):
+    product_id: int
+    product_name: str
+    quantity_sold: int
+    unit_price: Decimal
+    customer_name: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_phone: Optional[str] = None
+    
+    @field_validator('customer_phone')
+    @classmethod
+    def validate_phone(cls, v):
+        if v is not None and v.strip():
+            # Remove spaces and dashes
+            phone = v.strip().replace(' ', '').replace('-', '')
+            if not phone.isdigit():
+                raise ValueError('Phone number must contain only digits')
+            if len(phone) < 10 or len(phone) > 15:
+                raise ValueError('Phone number must be between 10 and 15 digits')
+            return phone
+        return v
+    
+    @field_validator('quantity_sold')
+    @classmethod
+    def validate_quantity(cls, v):
+        if v <= 0:
+            raise ValueError('Quantity must be greater than 0')
+        return v
+
+class OrderBase(BaseModel):
+    id: int
+    product_id: int
+    product_name: str
+    quantity_sold: int
+    total_amount: Decimal
+    customer_name: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_phone: Optional[str] = None
+    sale_date: datetime
+    created_by: str
+    
+    class Config:
+        from_attributes = True
+
+class OrdersResponse(BaseModel):
+    orders: List[OrderBase]
+
+class CreateOrderResponse(BaseModel):
+    success: bool
+    message: str
+    order: Optional[OrderBase] = None

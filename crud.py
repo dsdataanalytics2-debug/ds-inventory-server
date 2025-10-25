@@ -224,6 +224,18 @@ def get_all_products(db: Session):
     products = db.query(Product).all()
     return [product.name for product in products]
 
+def get_all_products_with_details(db: Session):
+    """Get all products with full details (id, name, available_stock) for order creation"""
+    products = db.query(Product).all()
+    return [
+        {
+            "id": product.id,
+            "name": product.name,
+            "available_stock": product.available_stock
+        }
+        for product in products
+    ]
+
 def get_daily_history(db: Session, start_date: str = None, end_date: str = None):
     """
     Get daily history aggregating add and sell transactions by date.
@@ -515,3 +527,151 @@ def delete_user(db: Session, user_id: int, current_user: User):
     )
     
     return {"message": f"User {username} deleted successfully"}
+
+# Order CRUD Operations
+def create_order(db: Session, request, current_user: User):
+    """
+    Create a new order with customer details and update inventory
+    """
+    try:
+        # Check if product exists
+        product = db.query(Product).filter(Product.id == request.product_id).first()
+        
+        if not product:
+            return {"error": "Product not found"}
+        
+        # Check stock availability
+        if product.available_stock < request.quantity_sold:
+            return {"error": f"Insufficient stock. Available: {product.available_stock}, Requested: {request.quantity_sold}"}
+        
+        # Calculate total amount
+        total_amount = Decimal(str(request.quantity_sold)) * request.unit_price
+        
+        # Create order record
+        from models import Order
+        order = Order(
+            product_id=request.product_id,
+            product_name=request.product_name,
+            quantity_sold=request.quantity_sold,
+            total_amount=total_amount,
+            customer_name=request.customer_name,
+            customer_address=request.customer_address,
+            customer_phone=request.customer_phone,
+            created_by=current_user.username
+        )
+        db.add(order)
+        
+        # Update product inventory
+        product.total_sold_qty += request.quantity_sold
+        product.total_sold_amount += total_amount
+        product.available_stock = product.total_added_qty - product.total_sold_qty
+        
+        # Commit order first to get the sale_date
+        db.commit()
+        db.refresh(order)
+        
+        # Also add to sell_history for consistency with existing system
+        from datetime import datetime
+        sell_history = SellHistory(
+            product_id=product.id,
+            quantity=request.quantity_sold,
+            unit_price=request.unit_price,
+            total_amount=total_amount,
+            date=order.sale_date.strftime('%Y-%m-%d') if order.sale_date else datetime.now().strftime('%Y-%m-%d')
+        )
+        db.add(sell_history)
+        
+        # Commit sell_history
+        db.commit()
+        db.refresh(product)
+        
+        # Log activity
+        try:
+            log_activity(
+                db,
+                current_user,
+                "Create Order",
+                f"order #{order.id} for {request.product_name}",
+                f"Sold {request.quantity_sold} units to {request.customer_name or 'N/A'} for ${total_amount}"
+            )
+        except Exception as log_error:
+            print(f"Warning: Failed to log activity: {str(log_error)}")
+        
+        return order
+        
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating order: {str(e)}")
+        return {"error": f"Failed to create order: {str(e)}"}
+
+def get_orders(db: Session, start_date: str = None, end_date: str = None, product_id: int = None):
+    """
+    Get all orders with optional filters
+    """
+    try:
+        query = db.query(models.Order).order_by(models.Order.sale_date.desc())
+        
+        # Apply filters if provided
+        if product_id:
+            query = query.filter(models.Order.product_id == product_id)
+        
+        if start_date and end_date:
+            query = query.filter(
+                and_(
+                    models.Order.sale_date >= start_date,
+                    models.Order.sale_date <= end_date
+                )
+            )
+        
+        orders = query.all()
+        return orders
+        
+    except Exception as e:
+        print(f"Error fetching orders: {str(e)}")
+        return []
+
+import models
+
+
+# Item CRUD Operations
+def create_item(db: Session, item_name: str, current_user: User):
+    """Create a new item"""
+    try:
+        # Check if item already exists
+        existing_item = db.query(models.Item).filter(models.Item.item_name == item_name).first()
+        if existing_item:
+            return {"error": f"Item '{item_name}' already exists"}
+        
+        # Create new item
+        new_item = models.Item(item_name=item_name)
+        db.add(new_item)
+        db.commit()
+        db.refresh(new_item)
+        
+        # Log activity
+        try:
+            log_activity(
+                db,
+                current_user,
+                "Create Item",
+                f"item {item_name}",
+                f"Created new item: {item_name}"
+            )
+        except Exception as log_error:
+            print(f"Warning: Failed to log activity: {str(log_error)}")
+        
+        return new_item
+        
+    except Exception as e:
+        db.rollback()
+        print(f"Error creating item: {str(e)}")
+        return {"error": f"Failed to create item: {str(e)}"}
+
+def get_all_items(db: Session):
+    """Get all items"""
+    try:
+        items = db.query(models.Item).order_by(models.Item.item_name).all()
+        return items
+    except Exception as e:
+        print(f"Error fetching items: {str(e)}")
+        return []

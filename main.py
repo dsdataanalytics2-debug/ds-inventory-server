@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
+from io import BytesIO
 
 import models
 import schemas
@@ -16,8 +18,26 @@ from activity import get_activity_logs
 # Force rebuild test 3 - Clean Pydantic v2 + Python 3.11.9 fix
 print("Force rebuild test 3")
 
-# Create database tables
+# Create database tables (including new orders and items tables)
 models.Base.metadata.create_all(bind=engine)
+
+# Ensure orders and items tables exist (backward compatibility)
+try:
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    
+    if 'orders' not in inspector.get_table_names():
+        print("Creating orders table...")
+        models.Order.__table__.create(bind=engine, checkfirst=True)
+        print("✅ Orders table created successfully")
+    
+    if 'items' not in inspector.get_table_names():
+        print("Creating items table...")
+        models.Item.__table__.create(bind=engine, checkfirst=True)
+        print("✅ Items table created successfully")
+        
+except Exception as e:
+    print(f"Note: Table check: {str(e)}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,11 +108,14 @@ def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 def register(
     user_data: Dict[str, Any], 
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role(["superadmin"]))
+    current_user: models.User = Depends(require_role(["superadmin", "admin"]))
 ):
     """
-    Register a new user (only superadmin can do this)
+    Register a new user (superadmin and admin can do this)
     POST /register
+    
+    - Superadmin can create all roles (superadmin, admin, editor, viewer)
+    - Admin can only create editor and viewer roles
     """
     try:
         print(f"Received user_data: {user_data}")  # Debug log
@@ -111,12 +134,22 @@ def register(
                 token=None
             )
         
+        requested_role = user_data.get('role', 'viewer').lower()
+        
+        # Check if admin is trying to create admin or superadmin
+        if current_user.role.value == "admin" and requested_role in ["admin", "superadmin"]:
+            return schemas.AuthResponse(
+                success=False,
+                message="Admins can only create Editor or Viewer users",
+                token=None
+            )
+        
         # Manually create UserCreate object
         try:
             user_create = schemas.UserCreate(
                 username=user_data.get('username'),
                 password=user_data.get('password'),
-                role=user_data.get('role', 'viewer')  # Lowercase default
+                role=requested_role
             )
         except ValueError as ve:
             print(f"Validation error creating UserCreate: {str(ve)}")
@@ -154,9 +187,9 @@ def register(
 @app.get("/users", response_model=schemas.UsersResponse)
 def get_users(
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role(["superadmin"]))
+    current_user: models.User = Depends(require_role(["superadmin", "admin"]))
 ):
-    """Get all users (only superadmin can access)"""
+    """Get all users (superadmin and admin can access)"""
     try:
         users = crud.get_users(db)
         return schemas.UsersResponse(users=users)
@@ -167,9 +200,13 @@ def get_users(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role(["superadmin"]))
+    current_user: models.User = Depends(require_role(["superadmin", "admin"]))
 ):
-    """Delete a user (only superadmin can do this)"""
+    """
+    Delete a user (superadmin and admin can do this)
+    - Admins cannot delete superadmin or admin users
+    - Superadmins can delete any user except themselves
+    """
     try:
         result = crud.delete_user(db, user_id, current_user)
         
@@ -204,6 +241,56 @@ def get_activity_history(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# Item Management Endpoints
+@app.post("/items/create", response_model=schemas.ItemCreateResponse)
+def create_item(
+    item_data: schemas.ItemCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["superadmin", "admin", "editor"]))
+):
+    """
+    Create a new item
+    POST /items/create
+    
+    Accessible to: superadmin, admin, and editor
+    """
+    try:
+        result = crud.create_item(db, item_data.item_name, current_user)
+        
+        if isinstance(result, dict) and "error" in result:
+            return schemas.ItemCreateResponse(
+                success=False,
+                message=result["error"],
+                item=None
+            )
+        
+        return schemas.ItemCreateResponse(
+            success=True,
+            message=f"Item '{item_data.item_name}' created successfully",
+            item=result
+        )
+    except Exception as e:
+        print(f"Error in create_item endpoint: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/items", response_model=schemas.ItemsListResponse)
+def get_items(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get all items
+    GET /items
+    
+    Accessible to: all authenticated users
+    """
+    try:
+        items = crud.get_all_items(db)
+        return schemas.ItemsListResponse(items=items)
+    except Exception as e:
+        print(f"Error in get_items endpoint: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.post("/add", response_model=schemas.ProductResponse)
 def add_product(
     request: schemas.AddProductRequest, 
@@ -224,34 +311,38 @@ def add_product(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/sell", response_model=schemas.ProductResponse)
-def sell_product(
-    request: schemas.SellProductRequest, 
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(require_role(["superadmin", "admin", "editor"]))
-):
-    """
-    Record a product sale (requires add/edit permissions)
-    POST /sell
-    """
-    try:
-        result = crud.sell_product(db, request, current_user)
-        
-        # Check if result contains error
-        if isinstance(result, dict) and "error" in result:
-            return schemas.ProductResponse(
-                success=False,
-                message=result["error"],
-                product=None
-            )
-        
-        return schemas.ProductResponse(
-            success=True,
-            message=f"Successfully sold {request.quantity} units of {request.product_name} at ${request.unit_price} each (Total: ${request.quantity * request.unit_price})",
-            product=result
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# SELL PRODUCT ENDPOINT - DISABLED
+# The Sell Product feature has been removed from the project
+# Orders module should be used instead for recording sales
+# 
+# @app.post("/sell", response_model=schemas.ProductResponse)
+# def sell_product(
+#     request: schemas.SellProductRequest, 
+#     db: Session = Depends(get_db),
+#     current_user: models.User = Depends(require_role(["superadmin", "admin", "editor"]))
+# ):
+#     """
+#     Record a product sale (requires add/edit permissions)
+#     POST /sell
+#     """
+#     try:
+#         result = crud.sell_product(db, request, current_user)
+#         
+#         # Check if result contains error
+#         if isinstance(result, dict) and "error" in result:
+#             return schemas.ProductResponse(
+#                 success=False,
+#                 message=result["error"],
+#                 product=None
+#             )
+#         
+#         return schemas.ProductResponse(
+#             success=True,
+#             message=f"Successfully sold {request.quantity} units of {request.product_name} at ${request.unit_price} each (Total: ${request.quantity * request.unit_price})",
+#             product=result
+#         )
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/summary")
 def get_summary(
@@ -305,6 +396,18 @@ def get_products(
     try:
         product_names = crud.get_all_products(db)
         return {"products": product_names}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/products/details")
+def get_products_with_details(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Get all products with full details (id, name, available_stock) for order creation"""
+    try:
+        products = crud.get_all_products_with_details(db)
+        return {"products": products}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -557,6 +660,148 @@ def health_check():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
     }
+
+# Order Management Endpoints
+@app.post("/orders/create", response_model=schemas.CreateOrderResponse)
+def create_order(
+    request: schemas.CreateOrderRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["superadmin", "admin", "editor"]))
+):
+    """
+    Create a new order with customer details
+    POST /orders/create
+    
+    Requires: superadmin, admin, or editor role
+    """
+    try:
+        result = crud.create_order(db, request, current_user)
+        
+        # Check if result contains error
+        if isinstance(result, dict) and "error" in result:
+            return schemas.CreateOrderResponse(
+                success=False,
+                message=result["error"],
+                order=None
+            )
+        
+        return schemas.CreateOrderResponse(
+            success=True,
+            message=f"Order created successfully! Sold {request.quantity_sold} units of {request.product_name} to {request.customer_name or 'Customer'}",
+            order=result
+        )
+    except Exception as e:
+        print(f"Error in create_order endpoint: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/orders", response_model=schemas.OrdersResponse)
+def get_orders(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    product_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["superadmin", "admin", "editor"]))
+):
+    """
+    Get all orders with optional filters
+    GET /orders
+    GET /orders?start_date=2025-10-01&end_date=2025-10-31
+    GET /orders?product_id=1
+    
+    Accessible to: superadmin, admin, and editor
+    """
+    try:
+        orders = crud.get_orders(db, start_date, end_date, product_id)
+        return schemas.OrdersResponse(orders=orders)
+    except Exception as e:
+        print(f"Error in get_orders endpoint: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/orders/export")
+def export_orders_to_excel(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(require_role(["superadmin", "admin"]))
+):
+    """
+    Export all orders to Excel file
+    GET /orders/export
+    
+    Only accessible to: superadmin and admin
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        
+        # Get all orders
+        orders = crud.get_orders(db)
+        
+        # Create workbook and worksheet
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Orders"
+        
+        # Define headers
+        headers = [
+            "Order ID",
+            "Product",
+            "Quantity",
+            "Customer Name",
+            "Phone",
+            "Address",
+            "Total Amount",
+            "Sale Date",
+            "Created By"
+        ]
+        
+        # Style for headers
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Write headers
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.value = header
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        
+        # Write data
+        for row_num, order in enumerate(orders, 2):
+            ws.cell(row=row_num, column=1, value=order.id)
+            ws.cell(row=row_num, column=2, value=order.product_name)
+            ws.cell(row=row_num, column=3, value=order.quantity_sold)
+            ws.cell(row=row_num, column=4, value=order.customer_name or "N/A")
+            ws.cell(row=row_num, column=5, value=order.customer_phone or "N/A")
+            ws.cell(row=row_num, column=6, value=order.customer_address or "N/A")
+            ws.cell(row=row_num, column=7, value=f"${float(order.total_amount):.2f}")
+            ws.cell(row=row_num, column=8, value=str(order.sale_date))
+            ws.cell(row=row_num, column=9, value=order.created_by)
+        
+        # Adjust column widths
+        column_widths = [10, 20, 10, 20, 15, 30, 15, 20, 15]
+        for col_num, width in enumerate(column_widths, 1):
+            ws.column_dimensions[chr(64 + col_num)].width = width
+        
+        # Save to BytesIO
+        excel_file = BytesIO()
+        wb.save(excel_file)
+        excel_file.seek(0)
+        
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"orders_export_{timestamp}.xlsx"
+        
+        # Return as streaming response
+        return StreamingResponse(
+            excel_file,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+        
+    except Exception as e:
+        print(f"Error exporting orders to Excel: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to export orders: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
